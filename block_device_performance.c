@@ -1,0 +1,483 @@
+#define _GNU_SOURCE
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+
+/* Computes t1 - t2 and returns the result in seconds. */
+double ts_diff(const struct timespec* t1, const struct timespec* t2)
+{
+	time_t sec_diff = t1->tv_sec - t2->tv_sec;
+	long nsec_diff = t1->tv_nsec - t2->tv_nsec;
+
+	return (double) sec_diff + (double) nsec_diff * 1e-9;
+}
+
+
+char* format_size(double size)
+{
+	char* buffer = malloc(20);
+	if (!buffer)
+		return buffer;
+
+	if ((size) >= 1024. * 1024. * 1024. * 1024.)
+	{
+		snprintf(buffer, 20, "%.2fTiB", size / 1024. / 1024. / 1024. / 1024.);
+	}
+	else if ((size) >= 1024. * 1024. * 1024.)
+	{
+		snprintf(buffer, 20, "%.2fGiB", size / 1024. / 1024. / 1024.);
+	}
+	else if ((size) >= 1024. * 1024.)
+	{
+		snprintf(buffer, 20, "%.2fMiB", size / 1024. / 1024.);
+	}
+	else if ((size) >= 1024.)
+	{
+		snprintf(buffer, 20, "%.2fKiB", size / 1024.);
+	}
+	else
+	{
+		snprintf(buffer, 20, "%.0fB", size);
+	}
+
+	return buffer;
+}
+
+
+/* Returns -1 on failure, 0 if it is not a block device and 1 if it is one. */
+int is_block_device(const char* path)
+{
+	struct stat sbuf;
+
+	if (stat(path, &sbuf) < 0)
+	{
+		printf("stat of `%s' failed: %s\n", path, strerror(errno));
+		return -1;
+	}
+
+	if (S_ISBLK(sbuf.st_mode))
+		return 1;
+	else
+		return 0;
+}
+
+
+int parse_size(const char* str, unsigned long long* psize)
+{
+	size_t cnt = strlen(str);
+	unsigned long long size = 1;
+
+	if (cnt == 0)
+	{
+		printf("Invalid length.\n");
+		return -1;
+	}
+
+	char suffix = str[cnt - 1];
+	switch(suffix)
+	{
+		case 'K':
+			size = 1024ULL;
+			break;
+
+		case 'M':
+			size = 1024ULL * 1024ULL;
+			break;
+
+		case 'G':
+			size = 1024ULL * 1024ULL * 1024ULL;
+			break;
+
+		case 'T':
+			size = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+			break;
+
+		case '0':
+		case '1':
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+		case '8':
+		case '9':
+			suffix = 0;
+			break;
+
+		default:
+			printf("Invalid length suffix.\n");
+			return -1;
+	}
+
+	/* Ensure that all characters are digits except the suffix, which has been
+	 * verified above. */
+	for (int i = 0; i < cnt - 1; i++)
+	{
+		if (str[i] < '0' || str[i] > '9')
+		{
+			printf("Invalid length string.\n");
+			return 1;
+		}
+	}
+
+	if (suffix)
+	{
+		char* tmp = strdup(str);
+		if (!tmp)
+		{
+			perror("strdup");
+			return -1;
+		}
+
+		tmp[cnt - 1] = '\0';
+		size = size * atoll(tmp);
+
+		free(tmp);
+	}
+	else
+	{
+		size = size * atoll(str);
+	}
+
+	*psize = size;
+	return 0;
+}
+
+
+int copy_worker(
+		const char* source,
+		int source_direct,
+		const char* target,
+		int target_direct,
+		unsigned long long size,
+		unsigned long long skip,
+		unsigned long long seek)
+{
+	const int buffer_size = 1024 * 1024;
+
+	int fd_source = -1;
+	int fd_target = -1;
+
+	/* Raw buffer obtained through malloc */
+	char* _buffer = NULL;
+
+	/* Aligned buffer */
+	char* buffer = NULL;
+
+	unsigned long long total_read = 0;
+	struct timespec t_start, t_stop;
+
+	int return_code = -1;
+	int eax;
+
+	eax = O_RDONLY;
+	if (source_direct)
+		eax |= O_DIRECT;
+
+	fd_source = open(source, eax);
+	if (fd_source < 0)
+	{
+		printf("Worker: cannot open source `%s': %s\n", source, strerror(errno));
+		goto ERROR;
+	}
+
+	eax = O_WRONLY;
+	if (target_direct)
+		eax |= O_DIRECT;
+
+	fd_target = open(target, eax);
+	if (fd_target < 0)
+	{
+		printf("Worker: cannot open target `%s': %s\n", target, strerror(errno));
+		goto ERROR;
+	}
+
+	_buffer = malloc(buffer_size * 2);
+	if (!_buffer)
+	{
+		printf("Worker: cannot allocate buffer: %s\n", strerror(errno));
+		goto ERROR;
+	}
+
+	/* Align the buffer on the buffer's size */
+	buffer = _buffer + buffer_size;
+	buffer -= (intptr_t) buffer % buffer_size;
+
+	/* Start stopwatch */
+	if (clock_gettime(CLOCK_MONOTONIC, &t_start) < 0)
+	{
+		printf("Worker: failed to retrieve time: %s\n", strerror(errno));
+		goto ERROR;
+	}
+
+	/* Skip */
+	if (skip != 0)
+	{
+		if (lseek(fd_source, skip, SEEK_SET) < 0)
+		{
+			printf("Worker: failed to seek in source: %s\n", strerror(errno));
+			goto ERROR;
+		}
+	}
+
+	/* Seek */
+	if (seek != 0)
+	{
+		if (lseek(fd_target, seek, SEEK_SET) < 0)
+		{
+			printf("Worker: failed to seek in target: %s\n", strerror(errno));
+			goto ERROR;
+		}
+	}
+
+	/* Read-write loop */
+	for(;;)
+	{
+		int to_read = (size - total_read) >= buffer_size ? buffer_size :
+			(size - total_read);
+
+		if (to_read == 0)
+			break;
+
+		/* Read */
+		int cnt_read = read(fd_source, buffer, to_read);
+
+		if (cnt_read < 0)
+		{
+			printf("Worker: read() failed: %s\n", strerror(errno));
+			goto ERROR;
+		}
+
+		if (cnt_read == 0 && errno != EINTR)
+		{
+			printf("Worker: no more data available.\n");
+			goto ERROR;
+		}
+
+		if (cnt_read < to_read)
+		{
+			printf("Worker: INFO: read only %d%% of requested size.\n",
+					100 * cnt_read / to_read);
+		}
+
+		total_read += cnt_read;
+
+		/* Write */
+		for (int written = 0; written < cnt_read; )
+		{
+			int r = write(
+					fd_target,
+					buffer + written,
+					cnt_read - written);
+
+			if (r < 0)
+			{
+				printf("Worker: write() failed: %s\n", strerror(errno));
+				goto ERROR;
+			}
+
+			if (r == 0 && errno != EINTR)
+			{
+				printf("Worker: no more space left.\n");
+				goto ERROR;
+			}
+
+			if (r < (cnt_read - written))
+			{
+				printf("Worker: INFO: written only %d%% of requested size.\n",
+						100 * r / (cnt_read - written));
+			}
+
+			written += r;
+		}
+	}
+
+
+	/* Close fds s.t. syncing is contained in the counted time */
+	close(fd_target);
+	close(fd_source);
+
+	/* Take time */
+	if (clock_gettime(CLOCK_MONOTONIC, &t_stop) < 0)
+	{
+		printf("Worker: failed to retrieve time: %s\n", strerror(errno));
+		goto ERROR;
+	}
+
+	double diff = ts_diff(&t_stop, &t_start);
+
+	char* str_size = format_size((double) total_read / diff);
+	if (!str_size)
+	{
+		perror("format_size");
+		goto ERROR;
+	}
+
+	fd_target = fd_source = -1;
+
+	printf("%.6f seconds, %s/s\n", diff, str_size);
+
+	free(str_size);
+
+
+// SUCCESS:
+	return_code = 0;
+
+ERROR:
+	if (fd_target >= 0)
+		close(fd_target);
+
+	if (fd_source >= 0)
+		close(fd_source);
+
+	if (_buffer)
+		free(_buffer);
+
+	return return_code;
+}
+
+
+int main(int argc, char** argv)
+{
+	int source_direct = 0;
+	int target_direct = 1;
+
+	int eax;
+
+	if (argc < 4 || argc > 6)
+	{
+		printf("Usage: %s <source> <target> <size> [<skip> [<seek>]]\n\n", argv[0]);
+		printf("With size, skip and seek in bytes and optional suffix "
+				"T,G,M,K for Tibi-, Gibi-, Mibi- or Kibibytes.\n");
+
+		return EXIT_FAILURE;
+	}
+
+
+	/* Parse the size, skip and seek commandline parameters */
+	unsigned long long size;
+	unsigned long long skip = 0;
+	unsigned long long seek = 0;
+
+	if (parse_size(argv[3], &size) < 0)
+	{
+		printf("Invalid size.\n");
+		return EXIT_FAILURE;
+	}
+
+	if (argc >= 5)
+	{
+		if (parse_size(argv[4], &skip) < 0)
+		{
+			printf("Invalid skip.\n");
+			return EXIT_FAILURE;
+		}
+	}
+
+	if (argc >= 6)
+	{
+		if (parse_size(argv[5], &seek) < 0)
+		{
+			printf("Invalid seek.\n");
+			return EXIT_FAILURE;
+		}
+	}
+
+
+	/* See if the source and target files / devices are valid. */
+	const char* source = argv[1];
+	const char* target = argv[2];
+
+	if (strlen(source) == 0 || strlen(target) == 0)
+	{
+		printf ("Invalid source or target.\n");
+		return EXIT_FAILURE;
+	}
+
+	/* Access block devices in O_DIRECT mode. */
+	eax = is_block_device(source);
+	if (eax < 0)
+		return EXIT_FAILURE;
+
+	source_direct = eax;
+
+	eax = is_block_device(target);
+	if (eax < 0)
+		return EXIT_FAILURE;
+
+	target_direct = eax;
+
+	/* Try to open them */
+	eax = O_RDONLY;
+	if (source_direct)
+		eax |= O_DIRECT;
+
+	int fd = open(source, eax);
+	if (fd < 0)
+	{
+		printf("Failed to open source `%s': %s\n", source, strerror(errno));
+		return EXIT_FAILURE;
+	}
+
+	eax = O_WRONLY;
+	if (target_direct)
+		eax |= O_DIRECT;
+
+	int fd2 = open(target, eax);
+	if (fd2 < 0)
+	{
+		printf("Failed to open target `%s': %s\n", target, strerror(errno));
+		close(fd);
+		return EXIT_FAILURE;
+	}
+
+	close(fd2);
+	close(fd);
+
+	char* fmt_size = format_size(size);
+	if (!fmt_size)
+	{
+		perror("format_size");
+		return EXIT_FAILURE;
+	}
+
+	printf ("%s%s -> %s%s %llu bytes (%s)\n",
+			source, source_direct ? " (O_DIRECT)" : "",
+			target, target_direct ? " (O_DIRECT)" : "",
+			size, fmt_size);
+
+	free(fmt_size);
+	fmt_size = NULL;
+
+	/* Just for fun: Determine the clock's precision. */
+	struct timespec res;
+	if (clock_getres(CLOCK_MONOTONIC, &res) < 0)
+	{
+		perror("clock_getres");
+		return EXIT_FAILURE;
+	}
+
+	printf ("Clock resolution: %d sec, %ld nsec.\n",
+			(int) res.tv_sec, (long) res.tv_nsec);
+
+
+	int ret = copy_worker(
+			source, source_direct,
+			target, target_direct,
+			size, seek, skip);
+
+	if (ret < 0)
+		return EXIT_FAILURE;
+	else
+		return EXIT_SUCCESS;
+}
