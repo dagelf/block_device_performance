@@ -5,11 +5,32 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <pthread.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+
+
+/* structs */
+struct copy_worker_argument {
+	const char* source;
+	int source_direct;
+	const char* target;
+	int target_direct;
+	unsigned long long size;
+	unsigned long long skip;
+	unsigned long long seek;
+	double* transfer_time;
+};
+
+struct worker_desc {
+	struct copy_worker_argument argument;
+	pthread_t thread;
+	double transfer_time;
+	int result;
+};
 
 
 /* Computes t1 - t2 and returns the result in seconds. */
@@ -154,15 +175,19 @@ int parse_size(const char* str, unsigned long long* psize)
 }
 
 
-int copy_worker(
-		const char* source,
-		int source_direct,
-		const char* target,
-		int target_direct,
-		unsigned long long size,
-		unsigned long long skip,
-		unsigned long long seek)
+void* copy_worker(void* _arg)
 {
+	/* Unpack the argument */
+	struct copy_worker_argument* arg = _arg;
+	const char* source = arg->source;
+	int source_direct = arg->source_direct;
+	const char* target = arg->target;
+	int target_direct = arg->target_direct;
+	unsigned long long size = arg->size;
+	unsigned long long skip = arg->skip;
+	unsigned long long seek = arg->seek;
+	double* transfer_time = arg->transfer_time;
+
 	const int buffer_size = 1024 * 1024;
 
 	int fd_source = -1;
@@ -314,20 +339,7 @@ int copy_worker(
 		goto ERROR;
 	}
 
-	double diff = ts_diff(&t_stop, &t_start);
-
-	char* str_size = format_size((double) total_read / diff);
-	if (!str_size)
-	{
-		perror("format_size");
-		goto ERROR;
-	}
-
-	fd_target = fd_source = -1;
-
-	printf("%.6f seconds, %s/s\n", diff, str_size);
-
-	free(str_size);
+	*transfer_time = ts_diff(&t_stop, &t_start);
 
 
 // SUCCESS:
@@ -343,7 +355,7 @@ ERROR:
 	if (_buffer)
 		free(_buffer);
 
-	return return_code;
+	return (void*) (intptr_t) return_code;
 }
 
 
@@ -354,9 +366,11 @@ int main(int argc, char** argv)
 
 	int eax;
 
-	if (argc < 4 || argc > 6)
+	if (argc < 4 || argc > 7)
 	{
-		printf("Usage: %s <source> <target> <size> [<skip> [<seek>]]\n\n", argv[0]);
+		printf("Usage: %s <source> <target> <size> [<number of threads> [<skip> "
+				"[<seek>]]]\n\n", argv[0]);
+
 		printf("With size, skip and seek in bytes and optional suffix "
 				"T,G,M,K for Tibi-, Gibi-, Mibi- or Kibibytes.\n");
 
@@ -366,6 +380,7 @@ int main(int argc, char** argv)
 
 	/* Parse the size, skip and seek commandline parameters */
 	unsigned long long size;
+	int n_threads = 1;
 	unsigned long long skip = 0;
 	unsigned long long seek = 0;
 
@@ -377,16 +392,29 @@ int main(int argc, char** argv)
 
 	if (argc >= 5)
 	{
-		if (parse_size(argv[4], &skip) < 0)
+		unsigned long long tmp;
+
+		if (parse_size(argv[4], &tmp) < 0 || tmp < 1 || tmp > 256)
+		{
+			printf("Invalid number of worker threads.\n");
+			return EXIT_FAILURE;
+		}
+
+		n_threads = (int) tmp;
+	}
+
+	if (argc >= 6)
+	{
+		if (parse_size(argv[5], &skip) < 0)
 		{
 			printf("Invalid skip.\n");
 			return EXIT_FAILURE;
 		}
 	}
 
-	if (argc >= 6)
+	if (argc >= 7)
 	{
-		if (parse_size(argv[5], &seek) < 0)
+		if (parse_size(argv[6], &seek) < 0)
 		{
 			printf("Invalid seek.\n");
 			return EXIT_FAILURE;
@@ -459,25 +487,137 @@ int main(int argc, char** argv)
 	free(fmt_size);
 	fmt_size = NULL;
 
-	/* Just for fun: Determine the clock's precision. */
-	struct timespec res;
-	if (clock_getres(CLOCK_MONOTONIC, &res) < 0)
+	/* Start worker threads. By default one. */
+	int return_code = EXIT_FAILURE;
+
+	struct worker_desc* workers = calloc(n_threads, sizeof(struct worker_desc));
+	if (workers)
 	{
-		perror("clock_getres");
+		/* Meassure time over all infrastructural work */
+		struct timespec t_start, t_stop;
+
+		if (clock_gettime(CLOCK_MONOTONIC, &t_start) < 0)
+		{
+			perror("clock_gettime");
+			return EXIT_FAILURE;
+		}
+
+		/* Create worker threads */
+		unsigned long long size_per_thread = (size + n_threads) / n_threads;
+
+		/* Ensure 1M alignemnt for O_DIRECT */
+		size_per_thread += 1024 * 1024;
+		size_per_thread -= size_per_thread % (1024 * 1024);
+
+		unsigned long long size_assigned = 0;
+
+		for (int i = 0; i < n_threads; i++)
+		{
+			workers[i].argument = (struct copy_worker_argument){
+				source,
+				source_direct,
+				target,
+				target_direct,
+				size_per_thread,
+				skip + size_assigned,
+				seek + size_assigned,
+				&workers[i].transfer_time
+			};
+
+			if (size_assigned + workers[i].argument.size > size)
+				workers[i].argument.size = size - size_assigned;
+
+			size_assigned += workers[i].argument.size;
+
+			int r = pthread_create(&workers[i].thread, NULL,
+					copy_worker, &workers[i].argument);
+
+			if (r != 0)
+			{
+				printf("pthread_create for worker thread %d failed: %s\n",
+						i, strerror(r));
+
+				exit(EXIT_FAILURE);
+			}
+		}
+
+		/* Wait for workers to finish */
+		for (int i = 0; i < n_threads; i++)
+		{
+			void* tmp;
+			int r = pthread_join(workers[i].thread, &tmp);
+			if (r != 0)
+			{
+				printf("pthread_join for worker thread %d failed: %s\n",
+						i, strerror(r));
+
+				exit(EXIT_FAILURE);
+			}
+
+			workers[i].result = (int)(intptr_t) tmp;
+		}
+
+		/* Collect results */
+		int failed = 0;
+
+		for (int i = 0; i < n_threads; i++)
+		{
+			if (workers[i].result < 0)
+			{
+				printf("Worker thread %d failed.\n", i);
+				failed = 1;
+				break;
+			}
+
+			double throughput = (double) workers[i].argument.size /
+				workers[i].transfer_time;
+
+			char* str = format_size(throughput);
+			if (str)
+			{
+				printf ("Worker %d: time: %.4f, throughput: %s/s\n",
+						i, workers[i].transfer_time, str);
+
+				free(str);
+			}
+			else
+			{
+				failed = 1;
+				break;
+			}
+		}
+
+		if (!failed)
+		{
+			if (clock_gettime(CLOCK_MONOTONIC, &t_stop) < 0)
+			{
+				perror("clock_gettime");
+				return EXIT_FAILURE;
+			}
+
+			double total_time = ts_diff(&t_stop, &t_start);
+			double total_throughput = (double) size / total_time;
+
+			char* str = format_size(total_throughput);
+			if (str)
+			{
+				printf ("total time: %.4f, total throughput: %s/s\n",
+						total_time, str);
+
+				free(str);
+				return_code = EXIT_SUCCESS;
+			}
+			else
+				perror("format_size");
+		}
+
+		free(workers);
+	}
+	else
+	{
+		perror("calloc");
 		return EXIT_FAILURE;
 	}
 
-	printf ("Clock resolution: %d sec, %ld nsec.\n",
-			(int) res.tv_sec, (long) res.tv_nsec);
-
-
-	int ret = copy_worker(
-			source, source_direct,
-			target, target_direct,
-			size, seek, skip);
-
-	if (ret < 0)
-		return EXIT_FAILURE;
-	else
-		return EXIT_SUCCESS;
+	return return_code;
 }
