@@ -23,12 +23,16 @@ struct copy_worker_argument {
 	unsigned long long skip;
 	unsigned long long seek;
 	double* transfer_time;
+	unsigned long long* tot_written;
+	unsigned long long* tot_skipped; 
 };
 
 struct worker_desc {
 	struct copy_worker_argument argument;
 	pthread_t thread;
 	double transfer_time;
+	unsigned long long tot_written;
+	unsigned long long tot_skipped; 
 	int result;
 };
 
@@ -187,6 +191,9 @@ void* copy_worker(void* _arg)
 	unsigned long long skip = arg->skip;
 	unsigned long long seek = arg->seek;
 	double* transfer_time = arg->transfer_time;
+    unsigned long long* tot_written = arg->tot_written;
+	unsigned long long* tot_skipped = arg->tot_skipped; 
+
 
 	const int buffer_size = 1024 * 1024;
 
@@ -268,11 +275,9 @@ void* copy_worker(void* _arg)
 	/* Read-write loop */
 	for(;;)
 	{
-		int to_read = (size - total_read) >= buffer_size ? buffer_size :
-			(size - total_read);
+		int to_read = (size - total_read) >= buffer_size ? buffer_size : (size - total_read);
 
-		if (to_read == 0)
-			break;
+		if (to_read == 0) break;
 
 		/* Read */
 		int cnt_read = read(fd_source, buffer, to_read);
@@ -297,36 +302,55 @@ void* copy_worker(void* _arg)
 
 		total_read += cnt_read;
 
-		/* Write */
-		for (int written = 0; written < cnt_read; )
-		{
-			int r = write(
-					fd_target,
-					buffer + written,
-					cnt_read - written);
+		unsigned long long *c=buffer;
+		unsigned long long z,i=0;
+		for (z=0; z<cnt_read; z+=sizeof(long long)) {   // fixme consider ull overrunning buffer boundary
+//			c=buffer+z; 
+//			cprintf("%16llx ",*c); if(z%32==0) printf("\n");
+			if (*c==0) i++; 
+			c++; 
+		} 
+//		printf("\n%16d read, %16lld zeros, %16ld cnt_read/sizeof(long), %16ld\n",cnt_read,i,cnt_read/sizeof(long), sizeof(long));
+//		unsigned long long where=lseek(fd_target,0,SEEK_CUR);
+		if ((cnt_read/sizeof(long))==i) {
+//			printf("ALL ZEROES! SEEK! to_read = %i  total_read = %llu  tell %llu  diffs %llu \n",to_read,total_read,where,total_read-where);
+//            printf("seeked %llu, new offset %llu \n",cnt_read,lseek(fd_target,cnt_read,SEEK_CUR));
+			lseek(fd_target,cnt_read,SEEK_CUR);
+			(*tot_skipped)++; 
+		} else {
 
-			if (r < 0)
+			/* Write */
+			for (int written = 0; written < cnt_read; )
 			{
-				printf("Worker: write() failed: %s\n", strerror(errno));
-				goto ERROR;
-			}
+				int r = write(
+						fd_target,
+						buffer + written,
+						cnt_read - written);
 
-			if (r == 0 && errno != EINTR)
-			{
-				printf("Worker: no more space left.\n");
-				goto ERROR;
-			}
+				if (r < 0)
+				{
+					printf("Worker: write() failed: %s\n", strerror(errno));
+					goto ERROR;
+				}
 
-			if (r < (cnt_read - written))
-			{
-				printf("Worker: INFO: written only %d%% of requested size.\n",
-						100 * r / (cnt_read - written));
-			}
+				if (r == 0 && errno != EINTR)
+				{
+					printf("Worker: no more space left.\n");
+					goto ERROR;
+				}
 
-			written += r;
+				if (r < (cnt_read - written))
+				{
+					printf("Worker: INFO: written only %d%% of requested size.\n",
+							100 * r / (cnt_read - written));
+				}
+
+				written += r;
+				//printf("written %llu \n",written);
+				(*tot_written)++;
+			}
 		}
 	}
-
 
 	/* Close fds s.t. syncing is contained in the counted time */
 	close(fd_target);
@@ -340,7 +364,6 @@ void* copy_worker(void* _arg)
 	}
 
 	*transfer_time = ts_diff(&t_stop, &t_start);
-
 
 // SUCCESS:
 	return_code = 0;
@@ -421,7 +444,6 @@ int main(int argc, char** argv)
 		}
 	}
 
-
 	/* See if the source and target files / devices are valid. */
 	const char* source = argv[1];
 	const char* target = argv[2];
@@ -429,6 +451,13 @@ int main(int argc, char** argv)
 	if (strlen(source) == 0 || strlen(target) == 0)
 	{
 		printf ("Invalid source or target.\n");
+		return EXIT_FAILURE;
+	}
+
+	char* fmt_size = format_size(size);
+	if (!fmt_size)
+	{
+		perror("format_size");
 		return EXIT_FAILURE;
 	}
 
@@ -479,9 +508,11 @@ int main(int argc, char** argv)
 	close(fd2);
 	close(fd);
 
-	printf ("%s%s -> %s%s %llu bytes (%s)\n",
+	printf ("%s%s (skip %llu bytes) -> %s%s (seek %llu bytes) %llu bytes (%s)\n",
 			source, source_direct ? " (O_DIRECT)" : "",
+			skip,
 			target, target_direct ? " (O_DIRECT)" : "",
+			seek,
 			size, fmt_size);
 
 	free(fmt_size);
@@ -521,7 +552,9 @@ int main(int argc, char** argv)
 				size_per_thread,
 				skip + size_assigned,
 				seek + size_assigned,
-				&workers[i].transfer_time
+				&workers[i].transfer_time,
+				&workers[i].tot_written,
+				&workers[i].tot_skipped,
 			};
 
 			if (size_assigned + workers[i].argument.size > size)
@@ -575,8 +608,8 @@ int main(int argc, char** argv)
 			char* str = format_size(throughput);
 			if (str)
 			{
-				printf ("Worker %d: time: %.4f, throughput: %s/s\n",
-						i, workers[i].transfer_time, str);
+				printf ("Worker %d: time: %.4f, throughput: %s/s, written: %llu blocks, skipped: %llu blocks\n", 
+						i, workers[i].transfer_time, str, workers[i].tot_written, workers[i].tot_skipped);
 
 				free(str);
 			}
