@@ -27,6 +27,8 @@ The listed file will only be the size of the number of written blocks, if your f
 
 If the drive isn't blank be prepared to have a corrupt clone!
 
+I'm pretty sure the SSD firmware does the same, but has anyone ever checked, or seen an open SSD firmware? 
+
 Of course it makes no sense to write output to a pipe or stream, as a steam can't be "seeked", so it will fail. You will have to encode your own receiver, or possibly add functionality to Rsync if you want it to work over a tunneling protocol.  
 
 #### Alternatives
