@@ -42,9 +42,9 @@ I forgot about `dd conv=sparse`. Rusty. Coding practice. Also, this has parallel
 
 #### Contribute?
 
-`grep fixme *`
-
 Still lots to be done. 
+
+`grep fixme *`
 
 #### License
 
