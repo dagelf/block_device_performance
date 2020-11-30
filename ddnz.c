@@ -403,7 +403,8 @@ int main(int argc, char** argv)
 				"\n"
 				"Version 1 - forked from https://github.com/erbth/block_device_performance, initial commits, blocks are hardcoded at 1M\n"
 				"\n"
-				"Disclaimer: Some tests were done, I even cloned my own hard drive with it - but use at your own risk!");
+				"Disclaimer: Some tests were done, I even cloned my own hard drive with it - but use at your own risk!"
+				"\n");
 				// fixme add variable block sizes
 				// fixme add better argument handling
 				// fixme check effect of -O3 and revert to -O2 if it makes sense
