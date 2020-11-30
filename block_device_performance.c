@@ -352,6 +352,7 @@ void* copy_worker(void* _arg)
 				(*tot_written)++;
 			}
 		}
+	printf("\rto read: %llu, total_read: %llu, written: %llu blocks, skipped: %llu blocks",to_read,total_read,*tot_written,*tot_skipped);
 	}
 
 	/* Close fds s.t. syncing is contained in the counted time */
@@ -371,6 +372,7 @@ void* copy_worker(void* _arg)
 	return_code = 0;
 
 ERROR:
+	printf("\n");
 	if (fd_target >= 0)
 		close(fd_target);
 
@@ -463,13 +465,6 @@ int main(int argc, char** argv)
 		return EXIT_FAILURE;
 	}
 
-	char* fmt_size = format_size(size);
-	if (!fmt_size)
-	{
-		perror("format_size");
-		return EXIT_FAILURE;
-	}
-
 	/* Access block devices in O_DIRECT mode. */
 	eax = is_block_device(source);
 	if (eax < 0)
@@ -520,6 +515,8 @@ int main(int argc, char** argv)
 		dest_size=0;
 	}
 
+	//fixme add smartmontools check for drive age for additional warnings
+
     if (size > source_size) {  // fixme add override? 
 		printf("Warning: Size %s (%llu) larger than source, specify 0 to use source size (currently %llu)\n",fmt_size, size, source_size);
 	};
@@ -536,12 +533,13 @@ int main(int argc, char** argv)
 	close(fd2);
 	close(fd);
 
-	printf ("%s%s (skip %llu bytes) -> %s%s (seek %llu bytes) %llu bytes (%s)\n",
+	printf ("%s%s (skip %llu bytes) -> %s%s (seek %llu bytes) %llu bytes (%s). Source size is %llu and dst size is %llu.\n",
 			source, source_direct ? " (O_DIRECT)" : "",
 			skip,
 			target, target_direct ? " (O_DIRECT)" : "",
 			seek,
-			size, fmt_size);
+			size, fmt_size, 
+			source_size, dest_size); // fixme change naming to be consistent target===dest
 
 	free(fmt_size);
 	fmt_size = NULL;
@@ -620,6 +618,8 @@ int main(int argc, char** argv)
 
 		/* Collect results */
 		int failed = 0;
+		unsigned long long tot_skipped=0;
+		unsigned long long tot_written=0;
 
 		for (int i = 0; i < n_threads; i++)
 		{
@@ -638,7 +638,8 @@ int main(int argc, char** argv)
 			{
 				printf ("Worker %d: time: %.4f, throughput: %s/s, written: %llu blocks, skipped: %llu blocks\n", 
 						i, workers[i].transfer_time, str, workers[i].tot_written, workers[i].tot_skipped);
-
+				tot_written+=workers[i].tot_written;
+				tot_skipped+=workers[i].tot_skipped;
 				free(str);
 			}
 			else
@@ -662,8 +663,8 @@ int main(int argc, char** argv)
 			char* str = format_size(total_throughput);
 			if (str)
 			{
-				printf ("total time: %.4f, total throughput: %s/s\n",
-						total_time, str);
+				printf ("total time: %.4f, total throughput: %s/s, total skipped: %llu blocks, total written: %llu blocks\n",
+						total_time, str, tot_skipped, tot_written);			
 
 				free(str);
 				return_code = EXIT_SUCCESS;
