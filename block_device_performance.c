@@ -432,6 +432,13 @@ int main(int argc, char** argv)
 		return EXIT_FAILURE;
 	}
 
+	char* fmt_size = format_size(size);
+	if (!fmt_size)
+	{
+		perror("format_size");
+		return EXIT_FAILURE;
+	}
+
 	/* Access block devices in O_DIRECT mode. */
 	eax = is_block_device(source);
 	if (eax < 0)
@@ -471,13 +478,6 @@ int main(int argc, char** argv)
 
 	close(fd2);
 	close(fd);
-
-	char* fmt_size = format_size(size);
-	if (!fmt_size)
-	{
-		perror("format_size");
-		return EXIT_FAILURE;
-	}
 
 	printf ("%s%s -> %s%s %llu bytes (%s)\n",
 			source, source_direct ? " (O_DIRECT)" : "",
