@@ -1,8 +1,8 @@
 **Skip zero blocks for populating new blank drives, as well as sparse files.**
 
-A simple dd-clone to experiment with block devices' performance which includes threaded or parallel writes.
+A simple dd-clone to experiment with block devices' performance which includes threaded/parallel writes.
 
-Forked from https://github.com/erbth/block_device_performance with some functionality added:
+Forked from https://github.com/erbth/block_device_performance with skip zeroes functionality added. 
 
 
 #### Compile 
