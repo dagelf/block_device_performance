@@ -275,9 +275,11 @@ void* copy_worker(void* _arg)
 	/* Read-write loop */
 	for(;;)
 	{
-		int to_read = (size - total_read) >= buffer_size ? buffer_size : (size - total_read);
+		int to_read = (size - total_read) >= buffer_size ? buffer_size : 
+			(size - total_read);
 
-		if (to_read == 0) break;
+		if (to_read == 0) 
+			break;
 
 		/* Read */
 		int cnt_read = read(fd_source, buffer, to_read);
@@ -503,6 +505,32 @@ int main(int argc, char** argv)
 		printf("Failed to open target `%s': %s\n", target, strerror(errno));
 		close(fd);
 		return EXIT_FAILURE;
+	}
+
+	unsigned long long source_size=lseek(fd,0,SEEK_END);
+	if (source_size < 0)
+	{
+		printf("source seek end failed: %s\n", strerror(errno));
+		source_size=0;
+	}
+	unsigned long long dest_size=lseek(fd2,0,SEEK_END);
+	if (dest_size < 0)
+	{
+		printf("source seek end failed: %s\n", strerror(errno));
+		dest_size=0;
+	}
+
+    if (size > source_size) {  // fixme add override? 
+		printf("Warning: Size %s (%llu) larger than source, specify 0 to use source size (currently %llu)\n",fmt_size, size, source_size);
+	};
+
+	if (dest_size > size) {  
+		printf("Warning: Destination size larger than source.\n");
+	};
+
+	if (dest_size < size) {  // fixme add override? What's the use case though?
+		printf("Error: Destination too small or not seekable, refusing to write garbage.\n");
+		return EXIT_FAILURE;		
 	}
 
 	close(fd2);
