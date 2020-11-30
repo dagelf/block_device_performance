@@ -2,7 +2,7 @@
 
 A simple dd-clone to experiment with block devices' performance which includes threaded/parallel writes.
 
-Forked from https://github.com/erbth/block_device_performance with skip zeroes functionality added. 
+Forked from https://github.com/erbth/block_device_performance with skip zero blocks functionality added. 
 
 
 #### Compile 
