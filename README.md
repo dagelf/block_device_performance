@@ -23,6 +23,12 @@ The listed file will only be the size of the number of written blocks, if your f
 
     sudo ./ddnz /dev/sda /dev/sdb 
 
-Still lots to be done. Perhaps a better move to simply add a conv flag to dd. But this has parallelization which could add to speed improvements on networked filesystems, RAID and large RAM drives. 
+Still lots to be done. But this has parallelization which could add to speed improvements on networked filesystems, RAID and large RAM drives. 
 
 Of course it makes no sense to write output to a pipe or stream, as a steam can't be "seeked", so it will fail. You will have to encode your own receiver, or possibly add functionality to Rsync if you want it to work over a tunneling protocol.  
+
+#### Alternatives
+
+````dd if=/dev/sda of=/dev/sdb bs=1M conv=sparse````
+
+````rsync -avz --sparse source.img dest.img````
