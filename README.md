@@ -13,7 +13,9 @@ Forked from https://github.com/erbth/block_device_performance with skip zero blo
 
 #### Sparse file example:
 
+    dd if=/dev/zero of=sparse-file bs=1M count=100 conv=sparse # or
     dd if=/dev/zero of=sparse-file bs=1 count=0 seek=100M
+    
     sudo ./ddnz /dev/sda sparse-file 100M
     ls -lhs sparse-file 
 
