@@ -29,6 +29,17 @@ Of course it makes no sense to write output to a pipe or stream, as a steam can'
 
 #### Alternatives
 
-````dd if=/dev/sda of=/dev/sdb bs=1M conv=sparse````
+Functionally equivalent: ````dd if=/dev/sda of=/dev/sdb bs=1M conv=sparse````
 
-````rsync -avz --sparse source.img dest.img````
+Even more optimal: ````rsync -avz --sparse source.img dest.img````
+*But can't extract smaller parts*
+
+Can you think of any other ways? Can you pipe something to `rsync` or use tar? 
+
+#### Why?
+
+I forgot about `dd conv=sparse`. Rusty. Coding practice. Also, this has parallelisation. 
+
+#### License
+
+Ask https://github.com/erbth
