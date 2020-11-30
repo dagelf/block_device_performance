@@ -345,7 +345,7 @@ void* copy_worker(void* _arg)
 				(*tot_written)++;
 			}
 		}
-	printf("\rblock to read: %u, block total_read: %llu, written: %llu blocks, skipped: %llu blocks",to_read,total_read,*tot_written,*tot_skipped); // fixme do from main thread
+	printf("\rblock to read: %u, block total_read: %llu, skipped: %llu blocks, written: %llu blocks",to_read,total_read,*tot_skipped,*tot_written); // fixme do from main thread
 	}
 
 	/* Close fds s.t. syncing is contained in the counted time */
@@ -381,29 +381,22 @@ ERROR:
 
 int main(int argc, char** argv)
 {
+
 	int source_direct = 0;
 	int target_direct = 1;
 
 	int eax;
 
-	if (argc < 4 || argc > 7)
+	if (argc < 3 || argc > 7)
 	{
-		printf("Usage: %s <source> <target> <size> [<number of threads> [<skip> "
+		printf("Usage: %s <source> <target> [<size> <number of threads> [<skip> "
 				"[<seek>]]]\n\n", argv[0]);
 
 		printf("With size, skip and seek in bytes and optional suffix "
-				"T,G,M,K for Tibi-, Gibi-, Mibi- or Kibibytes.\n"
+				"T,G,M,K for Tibi-, Gibi-, Mibi- or Kibibytes (2^n ie. the 1024 variants).\n"
 				"\n"
-				"What it does: copy <source> to <target> with 1 or more threads, but dont copy blocks filled with zeroes. \n"
-				"ie. it doesn't skip all zeroes, just the blocks that are completely zero.\n"
-				"Why? Write an image into a blank sparse file, or a brand new medium that is initialized to all seroes. \n"
-				"But why really? Extend your SSD by a handful of writes during initial clone? Depends on the firmware I guess.\n"
-				"... Add seconds, minutes, or years to its life? If you have any info, add it at https://github.com/dagelf/ddnz\n"
-				"If you want to audit the code please do so.\n"
-				"\n"
-				"Version 1 - forked from https://github.com/erbth/block_device_performance, initial commits, blocks are hardcoded at 1M\n"
-				"\n"
-				"Disclaimer: Some tests were done, I even cloned my own hard drive with it - but use at your own risk!"
+				"What it does: parallel version of dd bs=1M conv=sparse: copy <source> to <target> with 1 or more threads, but dont copy blocks filled with zeroes. "
+				"ie. it doesn't skip all zeroes, just the 1M blocks that are completely zero. Readme at https://github.com/dagelf/ddnz\n"
 				"\n");
 				// fixme add variable block sizes
 				// fixme add better argument handling
@@ -412,17 +405,17 @@ int main(int argc, char** argv)
 		return EXIT_FAILURE;
 	}
 
-
 	/* Parse the size, skip and seek commandline parameters */
-	unsigned long long size;
+	unsigned long long size = 0;
 	int n_threads = 1;
 	unsigned long long skip = 0;
 	unsigned long long seek = 0;
 
-	if (parse_size(argv[3], &size) < 0)
-	{
-		printf("Invalid size.\n");
-		return EXIT_FAILURE;
+	if (argc >= 4) {
+		if (parse_size(argv[3], &size) < 0) {
+			printf("Invalid size.\n");
+			return EXIT_FAILURE;
+		}
 	}
 
 	if (argc >= 5)
@@ -463,13 +456,6 @@ int main(int argc, char** argv)
 	if (strlen(source) == 0 || strlen(target) == 0)
 	{
 		printf ("Invalid source or target.\n");
-		return EXIT_FAILURE;
-	}
-
-	char* fmt_size = format_size(size);
-	if (!fmt_size)
-	{
-		perror("format_size");
 		return EXIT_FAILURE;
 	}
 
@@ -516,38 +502,48 @@ int main(int argc, char** argv)
 		printf("source seek end failed: %s\n", strerror(errno));
 		source_size=0;
 	}
+
 	unsigned long long dest_size=lseek(fd2,0,SEEK_END);
-	if (dest_size < 0)
+	if (dest_size <= 0)
 	{
 		printf("source seek end failed: %s\n", strerror(errno));
-		dest_size=0;
-	}
 
-	//fixme add smartmontools check for drive age for additional warnings
-
-    if (size > source_size) {  // fixme add override? 
-		printf("Warning: Size %s (%llu) larger than source, specify 0 to use source size (currently %llu)\n",fmt_size, size, source_size);
-	};
-
-	if (dest_size > size) {  
-		printf("Warning: Destination size larger than source.\n");
-	};
-
-	if (dest_size < size) {  // fixme add override? What's the use case though?
+		// fixme add override? What's the use case though?
 		printf("Error: Destination too small or not seekable, refusing to write garbage. Zero and/or size it first!\n");
 		return EXIT_FAILURE;		
 	}
 
+	//fixme add smartmontools check for drive age for additional warnings
+	if (size==0) {
+		size=source_size;
+	};
+	
+	if (size > dest_size) {  
+		printf("Warning: Copy will be truncated %llu bytes requested, target only has %llu bytes\n", size, dest_size);
+		size=dest_size;
+	};
+
+	char* fmt_size = format_size(size);
+	if (!fmt_size)
+	{
+		perror("format_size");
+		return EXIT_FAILURE;
+	}
+
+	if (source_size < dest_size) {  
+		printf("Warning: Source smaller than target (%llu bytes < %llu bytes, %llu smaller)\n", source_size, dest_size, dest_size-source_size);
+	};
+
 	close(fd2);
 	close(fd);
 
-	printf ("%s%s (skip %llu bytes) -> %s%s (seek %llu bytes) %llu bytes (%s). Source size is %llu and dst size is %llu.\n",
+	printf ("%s%s (skip %llu bytes) -> %s%s (seek %llu bytes)\nSource size is %llu and dst size is %llu.\nCopy %llu bytes (%s)\n",
 			source, source_direct ? " (O_DIRECT)" : "",
 			skip,
 			target, target_direct ? " (O_DIRECT)" : "",
 			seek,
-			size, fmt_size, 
-			source_size, dest_size); // fixme change naming to be consistent target===dest
+			source_size, dest_size,
+			size, fmt_size); // fixme change naming to be consistent target===dest
 
 	free(fmt_size);
 	fmt_size = NULL;
@@ -644,8 +640,8 @@ int main(int argc, char** argv)
 			char* str = format_size(throughput);
 			if (str)
 			{
-				printf ("Worker %d: time: %.4f, throughput: %s/s, written: %llu blocks, skipped: %llu blocks\n", 
-						i, workers[i].transfer_time, str, workers[i].tot_written, workers[i].tot_skipped);
+				printf ("Worker %d: time: %.4f, throughput: %s/s, skipped: %llu blocks, written: %llu blocks\n", 
+						i, workers[i].transfer_time, str, workers[i].tot_skipped, workers[i].tot_written);
 				tot_written+=workers[i].tot_written;
 				tot_skipped+=workers[i].tot_skipped;
 				free(str);
@@ -691,3 +687,5 @@ int main(int argc, char** argv)
 
 	return return_code;
 }
+
+// fixme: homogenise messages
