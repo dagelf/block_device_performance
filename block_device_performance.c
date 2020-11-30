@@ -307,16 +307,10 @@ void* copy_worker(void* _arg)
 		unsigned long long *c=buffer;
 		unsigned long long z,i=0;
 		for (z=0; z<cnt_read; z+=sizeof(long long)) {   // fixme consider ull overrunning buffer boundary
-//			c=buffer+z; 
-//			cprintf("%16llx ",*c); if(z%32==0) printf("\n");
 			if (*c==0) i++; 
 			c++; 
 		} 
-//		printf("\n%16d read, %16lld zeros, %16ld cnt_read/sizeof(long), %16ld\n",cnt_read,i,cnt_read/sizeof(long), sizeof(long));
-//		unsigned long long where=lseek(fd_target,0,SEEK_CUR);
 		if ((cnt_read/sizeof(long))==i) {
-//			printf("ALL ZEROES! SEEK! to_read = %i  total_read = %llu  tell %llu  diffs %llu \n",to_read,total_read,where,total_read-where);
-//            printf("seeked %llu, new offset %llu \n",cnt_read,lseek(fd_target,cnt_read,SEEK_CUR));
 			lseek(fd_target,cnt_read,SEEK_CUR);
 			(*tot_skipped)++; 
 		} else {
@@ -348,11 +342,10 @@ void* copy_worker(void* _arg)
 				}
 
 				written += r;
-				//printf("written %llu \n",written);
 				(*tot_written)++;
 			}
 		}
-	printf("\rto read: %llu, total_read: %llu, written: %llu blocks, skipped: %llu blocks",to_read,total_read,*tot_written,*tot_skipped);
+	printf("\rblock to read: %u, block total_read: %llu, written: %llu blocks, skipped: %llu blocks",to_read,total_read,*tot_written,*tot_skipped); // fixme do from main thread
 	}
 
 	/* Close fds s.t. syncing is contained in the counted time */
@@ -526,7 +519,7 @@ int main(int argc, char** argv)
 	};
 
 	if (dest_size < size) {  // fixme add override? What's the use case though?
-		printf("Error: Destination too small or not seekable, refusing to write garbage.\n");
+		printf("Error: Destination too small or not seekable, refusing to write garbage. Zero it first!\n");
 		return EXIT_FAILURE;		
 	}
 
