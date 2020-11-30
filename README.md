@@ -40,6 +40,10 @@ Can you think of any other ways? Can you pipe something to `rsync` or use `tar`?
 
 I forgot about `dd conv=sparse`. Rusty. Coding practice. Also, this has parallelisation. 
 
+#### Contribute?
+
+`grep fixme *`
+
 #### License
 
 Ask https://github.com/erbth
