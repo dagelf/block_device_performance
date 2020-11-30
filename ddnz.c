@@ -392,7 +392,21 @@ int main(int argc, char** argv)
 				"[<seek>]]]\n\n", argv[0]);
 
 		printf("With size, skip and seek in bytes and optional suffix "
-				"T,G,M,K for Tibi-, Gibi-, Mibi- or Kibibytes.\n");
+				"T,G,M,K for Tibi-, Gibi-, Mibi- or Kibibytes.\n"
+				"\n"
+				"What it does: copy <source> to <target> with 1 or more threads, but dont copy blocks filled with zeroes. \n"
+				"ie. it doesn't skip all zeroes, just the blocks that are completely zero.\n"
+				"Why? Write an image into a blank sparse file, or a brand new medium that is initialized to all seroes. \n"
+				"But why really? Extend your SSD by a handful of writes during initial clone? Depends on the firmware I guess.\n"
+				"... Add seconds, minutes, or years to its life? If you have any info, add it at https://github.com/dagelf/ddnz\n"
+				"If you want to audit the code please do so.\n"
+				"\n"
+				"Version 1 - forked from https://github.com/erbth/block_device_performance, initial commits, blocks are hardcoded at 1M\n"
+				"\n"
+				"Disclaimer: Some tests were done, I even cloned my own hard drive with it - but use at your own risk!");
+				// fixme add variable block sizes
+				// fixme add better argument handling
+				// fixme check effect of -O3 and revert to -O2 if it makes sense
 
 		return EXIT_FAILURE;
 	}
@@ -519,7 +533,7 @@ int main(int argc, char** argv)
 	};
 
 	if (dest_size < size) {  // fixme add override? What's the use case though?
-		printf("Error: Destination too small or not seekable, refusing to write garbage. Zero it first!\n");
+		printf("Error: Destination too small or not seekable, refusing to write garbage. Zero and/or size it first!\n");
 		return EXIT_FAILURE;		
 	}
 
