@@ -13,7 +13,9 @@ Forked from https://github.com/erbth/block_device_performance with skip zero blo
 
 #### Sparse file example:
 
+    dd if=/dev/zero of=sparse-file bs=1M count=100 conv=sparse # or
     dd if=/dev/zero of=sparse-file bs=1 count=0 seek=100M
+    
     sudo ./ddnz /dev/sda sparse-file 100M
     ls -lhs sparse-file 
 
@@ -23,7 +25,9 @@ The listed file will only be the size of the number of written blocks, if your f
 
     sudo ./ddnz /dev/sda /dev/sdb 
 
-Still lots to be done. But this has parallelization which could add to speed improvements on networked filesystems, RAID and large RAM drives. 
+If the drive isn't blank be prepared to have a corrupt clone!
+
+I'm pretty sure the SSD firmware does the same, but has anyone ever checked, or seen an open SSD firmware? 
 
 Of course it makes no sense to write output to a pipe or stream, as a steam can't be "seeked", so it will fail. You will have to encode your own receiver, or possibly add functionality to Rsync if you want it to work over a tunneling protocol.  
 
@@ -38,9 +42,11 @@ Can you think of any other ways? Can you pipe something to `rsync` or use `tar`?
 
 #### Why?
 
-I forgot about `dd conv=sparse`. Rusty. Coding practice. Also, this has parallelisation. 
+Rusty. Coding practice. I forgot about `dd conv=sparse`. Also, this has parallelization which could add to speed improvements on networked filesystems, RAID and large RAM drives. 
 
 #### Contribute?
+
+Still lots to be done. 
 
 `grep fixme *`
 
