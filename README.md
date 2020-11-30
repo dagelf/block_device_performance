@@ -8,7 +8,7 @@ Forked from https://github.com/erbth/block_device_performance with skip zero blo
 #### Compile 
     mkdir build
     cd build
-    cmake ..
+    cmake .. -DCMAKE_BUILD_TYPE=Debug 
     make
 
 #### Sparse file example:
