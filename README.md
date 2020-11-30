@@ -40,7 +40,7 @@ Can you think of any other ways? Can you pipe something to `rsync` or use `tar`?
 
 #### Why?
 
-I forgot about `dd conv=sparse`. Rusty. Coding practice. Also, this has parallelization which could add to speed improvements on networked filesystems, RAID and large RAM drives. 
+Rusty. Coding practice. I forgot about `dd conv=sparse`. Also, this has parallelization which could add to speed improvements on networked filesystems, RAID and large RAM drives. 
 
 #### Contribute?
 
